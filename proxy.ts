@@ -1,51 +1,19 @@
-import { type NextRequest, NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
-import { guestRegex, isDevelopmentEnvironment } from "./lib/constants";
+import { clerkMiddleware } from "@clerk/nextjs/server";
 
-export async function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+// No routes are gated at the edge. Anonymous visitors can open a chat and talk
+// to the model; the chat API simply skips database persistence for them. All
+// write/history endpoints and server actions perform their own Clerk auth
+// checks, and persistence is only wired up for signed-in users. We still run
+// clerkMiddleware so `auth()` is available everywhere downstream.
+const proxy = clerkMiddleware();
 
-  // if (pathname.startsWith("/ping")) {
-  //   return new Response("pong", { status: 200 });
-  // }
-
-  // if (pathname.startsWith("/api/auth")) {
-  //   return NextResponse.next();
-  // }
-
-  // const token = await getToken({
-  //   req: request,
-  //   secret: process.env.AUTH_SECRET,
-  //   secureCookie: !isDevelopmentEnvironment,
-  // });
-
-  // const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-
-  // if (!token) {
-  //   const redirectUrl = encodeURIComponent(new URL(request.url).pathname);
-
-  //   return NextResponse.redirect(
-  //     new URL(`${base}/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)
-  //   );
-  // }
-
-  // const isGuest = guestRegex.test(token?.email ?? "");
-
-  // if (token && !isGuest && ["/login", "/register"].includes(pathname)) {
-  //   return NextResponse.redirect(new URL(`${base}/`, request.url));
-  // }
-
-  // return NextResponse.next();
-}
+export default proxy;
+export { proxy };
 
 export const config = {
   matcher: [
-    "/",
-    "/chat/:id",
     "/api/:path*",
-    "/login",
-    "/register",
-
+    "/__clerk/:path*",
     "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)",
   ],
 };

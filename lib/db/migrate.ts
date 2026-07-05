@@ -8,12 +8,19 @@ config({
 });
 
 const runMigrate = async () => {
-  if (!process.env.POSTGRES_URL) {
-    console.log("POSTGRES_URL not defined, skipping migrations");
+  // Prefer DATABASE_URL (the valid Neon connection string) to match the app's
+  // runtime db client in lib/db/queries.ts; fall back to POSTGRES_URL.
+  const connectionString =
+    process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+
+  if (!connectionString) {
+    console.log(
+      "DATABASE_URL / POSTGRES_URL not defined, skipping migrations"
+    );
     process.exit(0);
   }
 
-  const connection = postgres(process.env.POSTGRES_URL, { max: 1 });
+  const connection = postgres(connectionString, { max: 1 });
   const db = drizzle(connection);
 
   console.log("Running migrations...");

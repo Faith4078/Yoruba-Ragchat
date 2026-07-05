@@ -2,7 +2,7 @@
 
 import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
-import { auth } from "@/app/(auth)/auth";
+import { auth } from "@clerk/nextjs/server";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { titleModel } from "@/lib/ai/models";
 import { titlePrompt } from "@/lib/ai/prompts";
@@ -25,33 +25,52 @@ export async function generateTitleFromUserMessage({
 }: {
   message: UIMessage;
 }) {
-  const { text } = await generateText({
-    model: getTitleModel(),
-    system: titlePrompt,
-    prompt: getTextFromMessage(message),
-    providerOptions: {
-      gateway: { order: titleModel.gatewayOrder },
-    },
-  });
-  return text
-    .replace(/^[#*"\s]+/, "")
-    .replace(/["]+$/, "")
-    .trim();
+  const userText = getTextFromMessage(message);
+  try {
+    const { text } = await generateText({
+      model: getTitleModel(),
+      system: titlePrompt,
+      prompt: userText,
+      // Titles are best-effort: don't burn rate-limit budget (shared with the
+      // chat model) on retries — fall back to the message text instead.
+      maxRetries: 0,
+      providerOptions: {
+        // Only route through the gateway when the title model lives there; the
+        // default Gemini title model is served directly.
+        ...(titleModel.gatewayOrder && {
+          gateway: { order: titleModel.gatewayOrder },
+        }),
+      },
+    });
+    const cleaned = text
+      .replace(/^[#*"\s]+/, "")
+      .replace(/["]+$/, "")
+      .trim();
+    if (cleaned) {
+      return cleaned;
+    }
+  } catch {
+    // Fall through to the message-derived title.
+  }
+  return userText.length > 60 ? `${userText.slice(0, 57)}…` : userText;
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
+  const { userId } = await auth();
+  // Anonymous chats are never persisted, so there is nothing to trim on the
+  // server — the client trims its local message state on its own.
+  if (!userId) {
+    return;
   }
 
   const [message] = await getMessageById({ id });
+  // Message isn't in the DB (e.g. an unpersisted chat); nothing to trim.
   if (!message) {
-    throw new Error("Message not found");
+    return;
   }
 
   const chat = await getChatById({ id: message.chatId });
-  if (!chat || chat.userId !== session.user.id) {
+  if (!chat || chat.userId !== userId) {
     throw new Error("Unauthorized");
   }
 
@@ -68,13 +87,18 @@ export async function updateChatVisibility({
   chatId: string;
   visibility: VisibilityType;
 }) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
+  const { userId } = await auth();
+  // Anonymous chats aren't persisted, so visibility has nothing to update.
+  if (!userId) {
+    return;
   }
 
   const chat = await getChatById({ id: chatId });
-  if (!chat || chat.userId !== session.user.id) {
+  // Chat not persisted yet (or owned by someone else) — nothing to do / deny.
+  if (!chat) {
+    return;
+  }
+  if (chat.userId !== userId) {
     throw new Error("Unauthorized");
   }
 

@@ -43,8 +43,6 @@ type ActiveChatContextValue = {
   isReadonly: boolean;
   isLoading: boolean;
   votes: Vote[] | undefined;
-  currentModelId: string;
-  setCurrentModelId: (id: string) => void;
   showCreditCardAlert: boolean;
   setShowCreditCardAlert: Dispatch<SetStateAction<boolean>>;
 };
@@ -72,12 +70,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   prevPathnameRef.current = pathname;
 
   const chatId = chatIdFromUrl ?? newChatIdRef.current;
-
-  const [currentModelId, setCurrentModelId] = useState(DEFAULT_CHAT_MODEL);
-  const currentModelIdRef = useRef(currentModelId);
-  useEffect(() => {
-    currentModelIdRef.current = currentModelId;
-  }, [currentModelId]);
 
   const [input, setInput] = useState("");
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
@@ -141,10 +133,15 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         return {
           body: {
             id: request.id,
+            // Normal send: include the new `message` AND the full in-session
+            // `messages`. Signed-in users get history rebuilt from the DB, but
+            // anonymous chats aren't persisted, so the server relies on this
+            // client-sent history to keep conversation context. Tool-approval
+            // continuations send only `messages` (no `message`).
             ...(isToolApprovalContinuation
               ? { messages: request.messages }
-              : { message: lastMessage }),
-            selectedChatModel: currentModelIdRef.current,
+              : { message: lastMessage, messages: request.messages }),
+            selectedChatModel: DEFAULT_CHAT_MODEL,
             selectedVisibilityType: visibility,
             ...request.body,
           },
@@ -197,18 +194,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }
   }, [chatId, isNewChat, setMessages]);
 
-  useEffect(() => {
-    if (chatData && !isNewChat) {
-      const cookieModel = document.cookie
-        .split("; ")
-        .find((row) => row.startsWith("chat-model="))
-        ?.split("=")[1];
-      if (cookieModel) {
-        setCurrentModelId(decodeURIComponent(cookieModel));
-      }
-    }
-  }, [chatData, isNewChat]);
-
   const hasAppendedQueryRef = useRef(false);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -260,8 +245,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       isReadonly,
       isLoading: !isNewChat && isLoading,
       votes,
-      currentModelId,
-      setCurrentModelId,
       showCreditCardAlert,
       setShowCreditCardAlert,
     }),
@@ -280,7 +263,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       isNewChat,
       isLoading,
       votes,
-      currentModelId,
       showCreditCardAlert,
     ]
   );

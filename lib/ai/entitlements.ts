@@ -1,14 +1,9 @@
-import type { UserType } from "@/app/(auth)/auth";
-
 type Entitlements = {
   maxMessagesPerHour: number;
 };
 
-export const entitlementsByUserType: Record<UserType, Entitlements> = {
-  guest: {
-    maxMessagesPerHour: 10,
-  },
-  regular: {
-    maxMessagesPerHour: 10,
-  },
+// With Clerk as the sole auth provider there is a single class of
+// authenticated user, so entitlements are no longer keyed by user type.
+export const entitlements: Entitlements = {
+  maxMessagesPerHour: 10,
 };

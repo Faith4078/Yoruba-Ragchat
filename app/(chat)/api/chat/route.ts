@@ -4,14 +4,14 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   generateId,
-  stepCountIs,
   streamText,
 } from "ai";
 import { checkBotId } from "botid/server";
 import { after } from "next/server";
+import { z } from "zod";
 import { createResumableStreamContext } from "resumable-stream";
-import { auth, type UserType } from "@/app/(auth)/auth";
-import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { auth } from "@clerk/nextjs/server";
+import { entitlements } from "@/lib/ai/entitlements";
 import {
   allowedModelIds,
   chatModels,
@@ -20,11 +20,6 @@ import {
 } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { getLanguageModel } from "@/lib/ai/providers";
-import { createDocument } from "@/lib/ai/tools/create-document";
-import { editDocument } from "@/lib/ai/tools/edit-document";
-import { getWeather } from "@/lib/ai/tools/get-weather";
-import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
-import { updateDocument } from "@/lib/ai/tools/update-document";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -41,7 +36,12 @@ import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import { checkIpRateLimit } from "@/lib/ratelimit";
 import type { ChatMessage } from "@/lib/types";
-import { convertToUIMessages, generateUUID } from "@/lib/utils";
+import {
+  convertToUIMessages,
+  generateUUID,
+  getTextFromMessage,
+} from "@/lib/utils";
+import { searchDishes as retrieveDishes } from "@/sanity/lib/dish-queries";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -71,14 +71,15 @@ export async function POST(request: Request) {
     const { id, message, messages, selectedChatModel, selectedVisibilityType } =
       requestBody;
 
-    const [, session] = await Promise.all([
+    const [, { userId }] = await Promise.all([
       checkBotId().catch(() => null),
       auth(),
     ]);
 
-    if (!session?.user) {
-      return new ChatbotError("unauthorized:chat").toResponse();
-    }
+    // The chat route is intentionally NOT gated. Anonymous visitors can chat
+    // and get answers; their conversations are simply never written to the
+    // database. Only signed-in users get persistence (history, rename, delete).
+    const isAuthenticated = Boolean(userId);
 
     const chatModel = allowedModelIds.has(selectedChatModel)
       ? selectedChatModel
@@ -86,41 +87,52 @@ export async function POST(request: Request) {
 
     await checkIpRateLimit(ipAddress(request));
 
-    const userType: UserType = session.user.type;
+    if (userId) {
+      const messageCount = await getMessageCountByUserId({
+        id: userId,
+        differenceInHours: 1,
+      });
 
-    const messageCount = await getMessageCountByUserId({
-      id: session.user.id,
-      differenceInHours: 1,
-    });
-
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerHour) {
-      return new ChatbotError("rate_limit:chat").toResponse();
+      if (messageCount > entitlements.maxMessagesPerHour) {
+        return new ChatbotError("rate_limit:chat").toResponse();
+      }
     }
 
-    const isToolApprovalFlow = Boolean(messages);
+    // A tool-approval continuation sends `messages` but no new `message`.
+    // A normal send always carries a new `message` (and, for anon history,
+    // also `messages`), so the presence of `message` disambiguates the two.
+    const isToolApprovalFlow = Boolean(messages) && !message;
 
-    const chat = await getChatById({ id });
     let messagesFromDb: DBMessage[] = [];
     let titlePromise: Promise<string> | null = null;
 
-    if (chat) {
-      if (chat.userId !== session.user.id) {
-        return new ChatbotError("forbidden:chat").toResponse();
+    if (userId) {
+      const chat = await getChatById({ id });
+
+      if (chat) {
+        if (chat.userId !== userId) {
+          return new ChatbotError("forbidden:chat").toResponse();
+        }
+        messagesFromDb = await getMessagesByChatId({ id });
+      } else if (message?.role === "user") {
+        await saveChat({
+          id,
+          userId,
+          title: "New chat",
+          visibility: selectedVisibilityType,
+        });
+        titlePromise = generateTitleFromUserMessage({ message });
       }
-      messagesFromDb = await getMessagesByChatId({ id });
-    } else if (message?.role === "user") {
-      await saveChat({
-        id,
-        userId: session.user.id,
-        title: "New chat",
-        visibility: selectedVisibilityType,
-      });
-      titlePromise = generateTitleFromUserMessage({ message });
     }
 
     let uiMessages: ChatMessage[];
 
-    if (isToolApprovalFlow && messages) {
+    if (isToolApprovalFlow && messages && !isAuthenticated) {
+      // Anonymous tool-approval continuation: no DB to rebuild from, so trust
+      // the full message list the client sends (it already carries the
+      // approval/denial state on the relevant tool parts).
+      uiMessages = messages as ChatMessage[];
+    } else if (isToolApprovalFlow && messages) {
       const dbMessages = convertToUIMessages(messagesFromDb);
       const approvalStates = new Map(
         messages.flatMap(
@@ -149,11 +161,18 @@ export async function POST(request: Request) {
           return part;
         }),
       })) as ChatMessage[];
-    } else {
+    } else if (isAuthenticated) {
+      // Signed-in normal send: authoritative history comes from the DB, plus
+      // the new user message.
       uiMessages = [
         ...convertToUIMessages(messagesFromDb),
         message as ChatMessage,
       ];
+    } else {
+      // Anonymous normal send: nothing is persisted server-side, so the client
+      // sends the full in-session conversation in `messages` (its last item is
+      // the new user message). Use it directly so the model keeps context.
+      uiMessages = (messages ?? (message ? [message] : [])) as ChatMessage[];
     }
 
     const { longitude, latitude, city, country } = geolocation(request);
@@ -165,7 +184,7 @@ export async function POST(request: Request) {
       country,
     };
 
-    if (message?.role === "user") {
+    if (isAuthenticated && message?.role === "user") {
       await saveMessages({
         messages: [
           {
@@ -184,28 +203,87 @@ export async function POST(request: Request) {
     const modelCapabilities = await getCapabilities();
     const capabilities = modelCapabilities[chatModel];
     const isReasoningModel = capabilities?.reasoning === true;
-    const supportsTools = capabilities?.tools === true;
+    const isGoogleModel = modelConfig?.provider === "google";
 
     const modelMessages = await convertToModelMessages(uiMessages);
 
+    // ---- Standard RAG: retrieve first, then a SINGLE generation ----
+    // Retrieve the relevant dish(es) ourselves rather than letting the model
+    // call a tool. This keeps it to one model call per message (half the API
+    // calls, so we stay within Gemini's free-tier limits) and gives us exact,
+    // deterministic control over how many dish cards show: one card for a
+    // specific-dish question, several only for a list/recommendation request.
+    const latestUserText = getTextFromMessage(
+      (uiMessages.at(-1) ?? message) as ChatMessage
+    );
+    const wantsMany =
+      /\b(recommend|list|suggest|options?|several|some|a few|what|which)\b/i.test(
+        latestUserText
+      ) &&
+      /\b(dish|dishes|food|foods|meal|meals|snack|snacks|soup|soups|swallow|recipe|recipes|option|options)\b/i.test(
+        latestUserText
+      );
+    const retrievedDishes = await retrieveDishes(
+      latestUserText,
+      wantsMany ? 5 : 1
+    );
+
+    const dishesForUI = retrievedDishes.map((dish) => ({
+      _id: dish._id,
+      name: dish.name ?? null,
+      category: dish.category ?? null,
+      picture: dish.picture ?? null,
+      ingredients: dish.ingredients ?? [],
+    }));
+
+    const dishContext =
+      retrievedDishes.length > 0
+        ? retrievedDishes
+            .map((dish, i) => {
+              const ingredients = (dish.ingredients ?? [])
+                .map((ing) =>
+                  [ing.name, ing.quantity].filter(Boolean).join(" — ")
+                )
+                .filter(Boolean)
+                .join("; ");
+              return [
+                `Dish ${i + 1}: ${dish.name ?? "Unknown"}`,
+                dish.category && `Category: ${dish.category}`,
+                dish.backgroundText && `Background: ${dish.backgroundText}`,
+                ingredients && `Ingredients: ${ingredients}`,
+                dish.recipeText && `Recipe: ${dish.recipeText}`,
+                dish.additionalInfoText && `More: ${dish.additionalInfoText}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
+            })
+            .join("\n\n---\n\n")
+        : "No matching dishes were found in the knowledge base.";
+
+    const ragSystem = `${systemPrompt({ requestHints, supportsTools: false })}
+
+Retrieved dish information (answer using ONLY this — do not invent dishes, ingredients, origins, or steps):
+
+${dishContext}
+
+The interface displays each retrieved dish's picture as a card BELOW your text, so write the full written details first and never paste image URLs.`;
+
     const stream = createUIMessageStream({
-      originalMessages: isToolApprovalFlow ? uiMessages : undefined,
       execute: async ({ writer: dataStream }) => {
+        // Emit the retrieved dishes so the UI renders their cards (images last).
+        if (dishesForUI.length > 0) {
+          dataStream.write({ type: "data-dishes", data: dishesForUI });
+        }
+
         const result = streamText({
           model: getLanguageModel(chatModel),
-          system: systemPrompt({ requestHints, supportsTools }),
+          system: ragSystem,
           messages: modelMessages,
-          stopWhen: stepCountIs(5),
-          experimental_activeTools:
-            isReasoningModel && !supportsTools
-              ? []
-              : [
-                  "getWeather",
-                  "createDocument",
-                  "editDocument",
-                  "updateDocument",
-                  "requestSuggestions",
-                ],
+          // Absorb Gemini free-tier burst throttling (429 with a retry-after of
+          // ~10-30s) transparently: exponential backoff 2s/4s/8s/16s ≈ 30s of
+          // patience, comfortably inside maxDuration (60s). The user just sees
+          // a slower response instead of an error.
+          maxRetries: 4,
           providerOptions: {
             ...(modelConfig?.gatewayOrder && {
               gateway: { order: modelConfig.gatewayOrder },
@@ -213,25 +291,13 @@ export async function POST(request: Request) {
             ...(modelConfig?.reasoningEffort && {
               openai: { reasoningEffort: modelConfig.reasoningEffort },
             }),
-          },
-          tools: {
-            getWeather,
-            createDocument: createDocument({
-              session,
-              dataStream,
-              modelId: chatModel,
-            }),
-            editDocument: editDocument({ dataStream, session }),
-            updateDocument: updateDocument({
-              session,
-              dataStream,
-              modelId: chatModel,
-            }),
-            requestSuggestions: requestSuggestions({
-              session,
-              dataStream,
-              modelId: chatModel,
-            }),
+            // Gemini implicit context caching stays on by default; disable
+            // thinking on the 2.5 Flash family to cut latency (2.0 models have
+            // no thinkingConfig, and Pro requires thinking).
+            ...(isGoogleModel &&
+              chatModel.includes("2.5-flash") && {
+                google: { thinkingConfig: { thinkingBudget: 0 } },
+              }),
           },
           experimental_telemetry: {
             isEnabled: isProductionEnvironment,
@@ -251,6 +317,10 @@ export async function POST(request: Request) {
       },
       generateId: generateUUID,
       onFinish: async ({ messages: finishedMessages }) => {
+        // Anonymous chats are ephemeral — never persist them.
+        if (!isAuthenticated) {
+          return;
+        }
         if (isToolApprovalFlow) {
           for (const finishedMsg of finishedMessages) {
             const existingMsg = uiMessages.find((m) => m.id === finishedMsg.id);
@@ -288,14 +358,27 @@ export async function POST(request: Request) {
         }
       },
       onError: (error) => {
+        const errorMessage = error instanceof Error ? error.message : "";
+
         if (
-          error instanceof Error &&
-          error.message?.includes(
+          errorMessage.includes(
             "AI Gateway requires a valid credit card on file to service requests"
           )
         ) {
           return "AI Gateway requires a valid credit card on file to service requests. Please visit https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card to add a card and unlock your free credits.";
         }
+
+        // Gemini free-tier throttling (HTTP 429 / RESOURCE_EXHAUSTED). Surface a
+        // clear, actionable message instead of a generic error so the chat
+        // doesn't silently show "nothing".
+        if (
+          /quota|rate.?limit|resource_exhausted|too many requests|429/i.test(
+            errorMessage
+          )
+        ) {
+          return "The assistant is temporarily over its usage limit. Please wait a minute and try again — if it keeps happening, the daily free quota is exhausted and resets at midnight PT.";
+        }
+
         return "Oops, an error occurred!";
       },
     });
@@ -303,7 +386,9 @@ export async function POST(request: Request) {
     return createUIMessageStreamResponse({
       stream,
       async consumeSseStream({ stream: sseStream }) {
-        if (!process.env.REDIS_URL) {
+        // Resumable streams are keyed off a persisted chat row, so they only
+        // apply to signed-in users.
+        if (!(isAuthenticated && process.env.REDIS_URL)) {
           return;
         }
         try {
@@ -350,19 +435,58 @@ export async function DELETE(request: Request) {
     return new ChatbotError("bad_request:api").toResponse();
   }
 
-  const session = await auth();
+  const { userId } = await auth();
 
-  if (!session?.user) {
+  if (!userId) {
     return new ChatbotError("unauthorized:chat").toResponse();
   }
 
   const chat = await getChatById({ id });
 
-  if (chat?.userId !== session.user.id) {
+  if (chat?.userId !== userId) {
     return new ChatbotError("forbidden:chat").toResponse();
   }
 
   const deletedChat = await deleteChatById({ id });
 
   return Response.json(deletedChat, { status: 200 });
+}
+
+const renameSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().trim().min(1).max(80),
+});
+
+// Rename a chat. Only the signed-in owner can rename their own chat.
+export async function PATCH(request: Request) {
+  let id: string;
+  let title: string;
+
+  try {
+    const parsed = renameSchema.parse(await request.json());
+    id = parsed.id;
+    title = parsed.title;
+  } catch {
+    return new ChatbotError("bad_request:api").toResponse();
+  }
+
+  const { userId } = await auth();
+
+  if (!userId) {
+    return new ChatbotError("unauthorized:chat").toResponse();
+  }
+
+  const chat = await getChatById({ id });
+
+  if (!chat) {
+    return new ChatbotError("not_found:chat").toResponse();
+  }
+
+  if (chat.userId !== userId) {
+    return new ChatbotError("forbidden:chat").toResponse();
+  }
+
+  await updateChatTitleById({ chatId: id, title });
+
+  return Response.json({ id, title }, { status: 200 });
 }

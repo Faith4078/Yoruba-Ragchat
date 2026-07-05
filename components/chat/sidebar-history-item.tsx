@@ -1,30 +1,31 @@
 import Link from "next/link";
-import { memo } from "react";
-import { useChatVisibility } from "@/hooks/use-chat-visibility";
+import { memo, useState } from "react";
+import { toast } from "sonner";
+import { useSWRConfig } from "swr";
+import { unstable_serialize } from "swr/infinite";
 import type { Chat } from "@/lib/db/schema";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuPortal,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { Input } from "../ui/input";
 import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "../ui/sidebar";
-import {
-  CheckCircleFillIcon,
-  GlobeIcon,
-  LockIcon,
-  MoreHorizontalIcon,
-  ShareIcon,
-  TrashIcon,
-} from "./icons";
+import { Button } from "../ui/button";
+import { getChatHistoryPaginationKey } from "./sidebar-history";
+import { MoreHorizontalIcon, PencilEditIcon, TrashIcon } from "./icons";
 
 const PureChatItem = ({
   chat,
@@ -37,10 +38,43 @@ const PureChatItem = ({
   onDelete: (chatId: string) => void;
   setOpenMobile: (open: boolean) => void;
 }) => {
-  const { visibilityType, setVisibilityType } = useChatVisibility({
-    chatId: chat.id,
-    initialVisibilityType: chat.visibility,
-  });
+  const { mutate } = useSWRConfig();
+
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(chat.title);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleRename = async () => {
+    const title = renameValue.trim();
+    if (!title || title === chat.title) {
+      setRenameOpen(false);
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: chat.id, title }),
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error("Failed to rename chat");
+      }
+
+      await mutate(unstable_serialize(getChatHistoryPaginationKey));
+      toast.success("Chat renamed");
+      setRenameOpen(false);
+    } catch {
+      toast.error("Couldn't rename chat");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <SidebarMenuItem>
@@ -66,42 +100,16 @@ const PureChatItem = ({
         </DropdownMenuTrigger>
 
         <DropdownMenuContent align="end" side="bottom">
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="cursor-pointer">
-              <ShareIcon />
-              <span>Share</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  className="cursor-pointer flex-row justify-between"
-                  onClick={() => {
-                    setVisibilityType("private");
-                  }}
-                >
-                  <div className="flex flex-row items-center gap-2">
-                    <LockIcon size={12} />
-                    <span>Private</span>
-                  </div>
-                  {visibilityType === "private" ? (
-                    <CheckCircleFillIcon />
-                  ) : null}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer flex-row justify-between"
-                  onClick={() => {
-                    setVisibilityType("public");
-                  }}
-                >
-                  <div className="flex flex-row items-center gap-2">
-                    <GlobeIcon />
-                    <span>Public</span>
-                  </div>
-                  {visibilityType === "public" ? <CheckCircleFillIcon /> : null}
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuPortal>
-          </DropdownMenuSub>
+          <DropdownMenuItem
+            className="cursor-pointer"
+            onSelect={() => {
+              setRenameValue(chat.title);
+              setRenameOpen(true);
+            }}
+          >
+            <PencilEditIcon size={14} />
+            <span>Rename</span>
+          </DropdownMenuItem>
 
           <DropdownMenuItem
             onSelect={() => onDelete(chat.id)}
@@ -112,12 +120,52 @@ const PureChatItem = ({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Dialog onOpenChange={setRenameOpen} open={renameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename chat</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            maxLength={80}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleRename();
+              }
+            }}
+            placeholder="Chat name"
+            value={renameValue}
+          />
+          <DialogFooter>
+            <Button
+              onClick={() => setRenameOpen(false)}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={isSaving || !renameValue.trim()}
+              onClick={handleRename}
+              type="button"
+            >
+              {isSaving ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarMenuItem>
   );
 };
 
 export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
   if (prevProps.isActive !== nextProps.isActive) {
+    return false;
+  }
+  if (prevProps.chat.title !== nextProps.chat.title) {
     return false;
   }
   return true;

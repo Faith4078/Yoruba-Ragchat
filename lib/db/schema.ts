@@ -29,9 +29,8 @@ export const chat = pgTable("Chat", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   createdAt: timestamp("createdAt").notNull(),
   title: text("title").notNull(),
-  userId: uuid("userId")
-    .notNull()
-    .references(() => user.id),
+  // Clerk user ids ("user_..."), not UUIDs and not rows in the legacy User table.
+  userId: text("userId").notNull(),
   visibility: varchar("visibility", { enum: ["public", "private"] })
     .notNull()
     .default("private"),
