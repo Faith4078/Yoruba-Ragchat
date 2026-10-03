@@ -78,7 +78,7 @@ export type EmbeddingMatch = { dishId: string; similarity: number };
 export async function searchDishEmbeddings(
   queryEmbedding: number[],
   limit = 3,
-  minSimilarity = 0.5
+  minSimilarity = 0.65
 ): Promise<EmbeddingMatch[]> {
   const { db } = getDb();
   const similarity = sql<number>`1 - (${cosineDistance(

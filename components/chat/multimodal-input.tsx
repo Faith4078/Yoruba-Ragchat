@@ -38,7 +38,7 @@ import {
   SlashCommandMenu,
   slashCommands,
 } from "./slash-commands";
-
+import { useLanguage } from "@/hooks/use-language";
 import type { VisibilityType } from "./visibility-selector";
 
 function PureMultimodalInput({
@@ -78,6 +78,15 @@ function PureMultimodalInput({
 }) {
   const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
+  const { language } = useLanguage();
+  const lang = language as "en" | "yo" | "pcm";
+  
+  const placeholders = {
+    en: "What would you like to know?",
+    yo: "Kí ni o fẹ́ mọ̀?",
+    pcm: "Wetin you wan know?"
+  };
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
   const hasAutoFocused = useRef(false);
@@ -392,6 +401,15 @@ function PureMultimodalInput({
         />
       )}
 
+      {lang !== "en" && (
+        <div className="absolute -top-3 left-4 z-10 flex animate-in fade-in slide-in-from-bottom-2 items-center gap-1.5 rounded-full border border-brand/20 bg-brand/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand backdrop-blur-sm">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75"></span>
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand"></span>
+          </span>
+          Speaking {lang === "yo" ? "Yorùbá" : "Pidgin"}
+        </div>
+      )}
       <PromptInput
         className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border [&>div]:bg-card [&>div]:shadow-sm [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:ring-1 [&>div]:focus-within:ring-brand"
         onSubmit={() => {
@@ -447,6 +465,7 @@ function PureMultimodalInput({
           </div>
         )}
         <PromptInputTextarea
+          placeholder={placeholders[lang] || placeholders.en}
           className="flex-none min-h-12 text-[13px] leading-relaxed px-4 pt-3.5 pb-1.5 placeholder:text-muted-foreground/35"
           data-testid="multimodal-input"
           onChange={handleInput}

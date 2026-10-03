@@ -266,7 +266,7 @@ export async function searchDishes(
     const { searchDishEmbeddings } = await import("@/lib/db/embeddings");
 
     const queryEmbedding = await embedQuery(query);
-    const matches = await searchDishEmbeddings(queryEmbedding, candidateDepth);
+    const matches = await searchDishEmbeddings(queryEmbedding, candidateDepth, 0.65);
     vectorRanking = toCompetitionRanks(
       matches.map((m) => ({ id: m.dishId, score: m.similarity }))
     );

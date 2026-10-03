@@ -13,26 +13,37 @@ export function LanguageToggle() {
   const { language, setLanguage } = useLanguage();
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setLanguage(language === "en" ? "yo" : "en")}
-          className="relative"
-          aria-label={
-            language === "en" ? "Switch to Yorùbá" : "Switch to English"
-          }
-        >
-          <GlobeIcon className="size-4" />
-          <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-primary px-1 text-[9px] font-bold leading-tight text-primary-foreground">
-            {language === "en" ? "EN" : "YO"}
-          </span>
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {language === "en" ? "Switch to Yorùbá" : "Switch to English"}
-      </TooltipContent>
-    </Tooltip>
+    <div className="flex items-center rounded-full border border-border/50 bg-muted/50 p-0.5">
+      <button
+        onClick={() => setLanguage("en")}
+        className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+          language === "en"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        EN
+      </button>
+      <button
+        onClick={() => setLanguage("yo")}
+        className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+          language === "yo"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        YO
+      </button>
+      <button
+        onClick={() => setLanguage("pcm")}
+        className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+          language === "pcm"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        PCM
+      </button>
+    </div>
   );
 }

@@ -9,7 +9,7 @@ import { searchDishes as retrieveDishes } from "@/sanity/lib/dish-queries";
  */
 export const searchDishes = tool({
   description:
-    "Search the Yoruba dish knowledge base. ALWAYS call this before answering any question about Yoruba dishes, their history/background, ingredients, or how to cook them. Returns the most relevant dishes with their background, ingredients, recipe, and images. Base your answer only on what this returns.",
+    "Search the Yoruba dish knowledge base. ALWAYS call this before answering any question about Yoruba dishes, their history/background, ingredients, or how to cook them — including open-ended recommendation questions like 'what can I cook for breakfast' or 'recommend a soup'. Never claim a dish doesn't exist without calling this first. Returns the most relevant dishes with their background, ingredients, recipe, and images. Base your answer only on what this returns.",
   inputSchema: z.object({
     query: z
       .string()

@@ -10,6 +10,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { LanguageToggle } from "./language-toggle";
 import type { VisibilityType } from "./visibility-selector";
 
 function ThemeToggle() {
@@ -63,7 +64,10 @@ function PureChatHeader({
   if (state === "collapsed" && !isMobile) {
     return (
       <header className="sticky top-0 flex h-14 items-center justify-end bg-background px-4">
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
       </header>
     );
   }
@@ -79,7 +83,8 @@ function PureChatHeader({
         <PanelLeftIcon className="size-4" />
       </Button>
 
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-1">
+        <LanguageToggle />
         <ThemeToggle />
       </div>
     </header>
