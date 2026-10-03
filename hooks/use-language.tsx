@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-export type Language = "en" | "yo";
+export type Language = "en" | "yo" | "pcm";
 
 type LanguageContextValue = {
   language: Language;
@@ -27,7 +27,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored === "yo" || stored === "en") {
+      if (stored === "yo" || stored === "en" || stored === "pcm") {
         setLanguageState(stored);
       }
     } catch {
