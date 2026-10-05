@@ -214,9 +214,6 @@ export function SidebarHistory({ user }: { user: AppUser | undefined }) {
   return (
     <>
       <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/70">
-          History
-        </SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
             {paginatedChatHistories &&

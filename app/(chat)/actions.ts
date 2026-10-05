@@ -1,8 +1,8 @@
 "use server";
 
+import { auth } from "@clerk/nextjs/server";
 import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
-import { auth } from "@clerk/nextjs/server";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { titleModel } from "@/lib/ai/models";
 import { titlePrompt } from "@/lib/ai/prompts";

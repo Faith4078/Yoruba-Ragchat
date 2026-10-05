@@ -6,9 +6,4 @@ export const isTestEnvironment = Boolean(
     process.env.CI_PLAYWRIGHT
 );
 
-export const suggestions = [
-  "ÒJÒJÒ",
-  "Àlàpá",
-  "Lúrú",
-  "Àbàrí",
-];
+export const suggestions = ["ÒJÒJÒ", "Àlàpá", "Lúrú", "Àbàrí"];

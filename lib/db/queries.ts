@@ -14,8 +14,10 @@ import {
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+
 // Document kinds retained for the existing `document` DB table (unused by the RAG chat UI).
 type ArtifactKind = "text" | "code" | "image" | "sheet";
+
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { ChatbotError } from "../errors";
 import {

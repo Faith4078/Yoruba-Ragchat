@@ -37,6 +37,7 @@ export function ChatShell() {
     votes,
     showCreditCardAlert,
     setShowCreditCardAlert,
+    error,
   } = useActiveChat();
 
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(
@@ -71,6 +72,8 @@ export function ChatShell() {
             <Messages
               addToolApprovalResponse={addToolApprovalResponse}
               chatId={chatId}
+              sendMessage={sendMessage}
+              error={error}
               isLoading={isLoading}
               isReadonly={isReadonly}
               messages={messages}

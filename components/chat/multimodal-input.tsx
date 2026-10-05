@@ -38,7 +38,7 @@ import {
   SlashCommandMenu,
   slashCommands,
 } from "./slash-commands";
-import { SuggestedActions } from "./suggested-actions";
+import { useLanguage } from "@/hooks/use-language";
 import type { VisibilityType } from "./visibility-selector";
 
 function PureMultimodalInput({
@@ -78,6 +78,15 @@ function PureMultimodalInput({
 }) {
   const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
+  const { language } = useLanguage();
+  const lang = language as "en" | "yo" | "pcm";
+  
+  const placeholders = {
+    en: "What would you like to know?",
+    yo: "Kí ni o fẹ́ mọ̀?",
+    pcm: "Wetin you wan know?"
+  };
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
   const hasAutoFocused = useRef(false);
@@ -348,17 +357,6 @@ function PureMultimodalInput({
         </div>
       )}
 
-      {!editingMessage &&
-        !isLoading &&
-        messages.length === 0 &&
-        attachments.length === 0 &&
-        uploadQueue.length === 0 && (
-          <SuggestedActions
-            chatId={chatId}
-            selectedVisibilityType={selectedVisibilityType}
-            sendMessage={sendMessage}
-          />
-        )}
 
       <input
         className="pointer-events-none fixed -top-4 -left-4 size-0.5 opacity-0"
@@ -403,8 +401,17 @@ function PureMultimodalInput({
         />
       )}
 
+      {lang !== "en" && (
+        <div className="absolute -top-3 left-4 z-10 flex animate-in fade-in slide-in-from-bottom-2 items-center gap-1.5 rounded-full border border-brand/20 bg-brand/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand backdrop-blur-sm">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75"></span>
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand"></span>
+          </span>
+          Speaking {lang === "yo" ? "Yorùbá" : "Pidgin"}
+        </div>
+      )}
       <PromptInput
-        className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border/30 [&>div]:bg-card/70 [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]"
+        className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border [&>div]:bg-card [&>div]:shadow-sm [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:ring-1 [&>div]:focus-within:ring-brand"
         onSubmit={() => {
           if (input.startsWith("/")) {
             const query = input.slice(1).trim();
@@ -458,7 +465,7 @@ function PureMultimodalInput({
           </div>
         )}
         <PromptInputTextarea
-          className="min-h-24 text-[13px] leading-relaxed px-4 pt-3.5 pb-1.5 placeholder:text-muted-foreground/35"
+          className="flex-none min-h-12 text-[13px] leading-relaxed px-4 pt-3.5 pb-1.5 placeholder:text-muted-foreground/35"
           data-testid="multimodal-input"
           onChange={handleInput}
           onKeyDown={(e) => {
@@ -495,7 +502,7 @@ function PureMultimodalInput({
             }
           }}
           placeholder={
-            editingMessage ? "Edit your message..." : "Ask anything..."
+            editingMessage ? "Edit your message..." : (placeholders[lang] || placeholders.en)
           }
           ref={textareaRef}
           value={input}
@@ -510,10 +517,10 @@ function PureMultimodalInput({
           ) : (
             <PromptInputSubmit
               className={cn(
-                "h-7 w-7 rounded-xl transition-all duration-200",
+                "h-8 w-8 rounded-xl transition-all duration-200 flex items-center justify-center",
                 input.trim()
-                  ? "bg-foreground text-background hover:opacity-85 active:scale-95"
-                  : "bg-muted text-muted-foreground/25 cursor-not-allowed"
+                  ? "bg-primary text-primary-foreground hover:opacity-85 active:scale-95"
+                  : "bg-muted text-muted-foreground/50 cursor-not-allowed"
               )}
               data-testid="send-button"
               disabled={!input.trim() || uploadQueue.length > 0}
@@ -607,7 +614,7 @@ function PureStopButton({
 }) {
   return (
     <Button
-      className="h-7 w-7 rounded-xl bg-foreground p-1 text-background transition-all duration-200 hover:opacity-85 active:scale-95 disabled:bg-muted disabled:text-muted-foreground/25 disabled:cursor-not-allowed"
+      className="h-8 w-8 rounded-xl bg-primary p-1 text-primary-foreground transition-all duration-200 hover:opacity-85 active:scale-95 disabled:bg-muted disabled:text-muted-foreground/50 disabled:cursor-not-allowed flex items-center justify-center"
       data-testid="stop-button"
       onClick={(event) => {
         event.preventDefault();

@@ -84,9 +84,7 @@ async function getDishesByIds(ids: string[]): Promise<RetrievedDish[]> {
  */
 export function dishEmbeddingText(dish: RetrievedDish): string {
   const ingredients = (dish.ingredients ?? [])
-    .map((ing) =>
-      [ing.name, ing.quantity].filter(Boolean).join(" — ")
-    )
+    .map((ing) => [ing.name, ing.quantity].filter(Boolean).join(" — "))
     .filter(Boolean)
     .join("\n");
 
@@ -145,12 +143,71 @@ function toCompetitionRanks(
 // dish's text. Left in, they add noise that can outvote the semantic leg;
 // they carry no signal about WHICH dish is meant.
 const KEYWORD_STOPWORDS = new Set([
-  "how", "what", "where", "when", "why", "who", "which", "did", "does", "the",
-  "and", "for", "with", "about", "tell", "know", "you", "your", "have", "has",
-  "prepare", "prepared", "preparation", "make", "made", "making", "cook",
-  "cooked", "cooking", "recipe", "recipes", "ingredient", "ingredients",
-  "step", "steps", "originate", "originated", "origin", "come", "from",
-  "food", "foods", "dish", "dishes", "meal", "meals", "eat", "eaten", "list",
+  "how",
+  "what",
+  "where",
+  "when",
+  "why",
+  "who",
+  "which",
+  "did",
+  "does",
+  "the",
+  "and",
+  "for",
+  "with",
+  "about",
+  "tell",
+  "know",
+  "you",
+  "your",
+  "have",
+  "has",
+  "prepare",
+  "prepared",
+  "preparation",
+  "make",
+  "made",
+  "making",
+  "cook",
+  "cooked",
+  "cooking",
+  "recipe",
+  "recipes",
+  "ingredient",
+  "ingredients",
+  "step",
+  "steps",
+  "originate",
+  "originated",
+  "origin",
+  "come",
+  "from",
+  "food",
+  "foods",
+  "dish",
+  "dishes",
+  "meal",
+  "meals",
+  "eat",
+  "eaten",
+  "list",
+  "bawo",
+  "ki",
+  "ni",
+  "se",
+  "je",
+  "dey",
+  "na",
+  "abeg",
+  "wetin",
+  "berekete",
+  "far",
+  "sho",
+  "wa",
+  "pa",
+  "body",
+  "bodu",
 ]);
 
 /** Ranked dish ids from lexical scoring: name hits weigh most, body mentions capped. */
@@ -229,7 +286,7 @@ export async function searchDishes(
     const { searchDishEmbeddings } = await import("@/lib/db/embeddings");
 
     const queryEmbedding = await embedQuery(query);
-    const matches = await searchDishEmbeddings(queryEmbedding, candidateDepth);
+    const matches = await searchDishEmbeddings(queryEmbedding, candidateDepth, 0.65);
     vectorRanking = toCompetitionRanks(
       matches.map((m) => ({ id: m.dishId, score: m.similarity }))
     );
@@ -242,5 +299,5 @@ export async function searchDishes(
   );
 
   const ranked = await getDishesByIds(fusedIds);
-  return ranked.length > 0 ? ranked.slice(0, limit) : dishes.slice(0, limit);
+  return ranked.slice(0, limit);
 }

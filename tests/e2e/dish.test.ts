@@ -1,7 +1,3 @@
-
-
-
-
 import { expect, test } from "@playwright/test";
 
 const PROJECT_ID = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID || "pjwcotmw";

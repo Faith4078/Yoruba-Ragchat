@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { LanguageProvider } from "@/hooks/use-language";
 
 import "./globals.css";
 
@@ -68,7 +69,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="antialiased">
+      <body className="antialiased" suppressHydrationWarning>
         <ClerkProvider appearance={{ theme: shadcn }}>
           <ThemeProvider
             attribute="class"
@@ -76,10 +77,13 @@ export default function RootLayout({
             disableTransitionOnChange
             enableSystem
           >
-            <TooltipProvider>{children}</TooltipProvider>
+            <LanguageProvider>
+              <TooltipProvider>{children}</TooltipProvider>
+            </LanguageProvider>
           </ThemeProvider>
         </ClerkProvider>
       </body>
     </html>
   );
 }
+
