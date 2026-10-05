@@ -1,10 +1,18 @@
-// Default to Gemini 2.5 Flash Lite served through the user's own Gemini API
-// key (direct Google provider). Free-tier quotas (as of mid-2026): flash-lite
+// Default to Gemini 3.1 Flash Lite served through the user's own Gemini API
+// key (direct Google provider). Free-tier quotas (as of mid-2026): 3.1 flash-lite
 // ~1000 requests/day & 15 RPM vs 2.5-flash's ~250/day & 10 RPM, and the 2.0
-// family has no free quota at all ("limit: 0"). Flash Lite is the only model
-// that comfortably survives a day of chatting on a free key. This also avoids
-// the Vercel AI Gateway credit-card requirement.
-export const DEFAULT_CHAT_MODEL = "gemini-2.5-flash-lite";
+// family has no free quota at all ("limit: 0"). A flash-lite model is the only
+// kind that comfortably survives a day of chatting on a free key. This also
+// avoids the Vercel AI Gateway credit-card requirement. Model code per
+// https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite
+export const DEFAULT_CHAT_MODEL = "gemini-3.1-flash-lite";
+
+// Used when a Gemini model stays rate limited after its retries (see
+// lib/ai/resilient-model.ts). Override with GEMINI_FALLBACK_MODEL if Google
+// renames or retires this id. If this model is the one being used, the
+// default model is its fallback instead (see lib/ai/providers.ts).
+export const GEMINI_FALLBACK_MODEL_ID =
+  process.env.GEMINI_FALLBACK_MODEL ?? "gemini-2.5-flash";
 
 export const titleModel: {
   id: string;
@@ -43,6 +51,14 @@ export type ChatModel = {
 };
 
 export const chatModels: ChatModel[] = [
+  {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash Lite",
+    provider: "google",
+    description: "Fast Gemini model with a generous free-tier quota",
+    direct: true,
+    capabilities: { tools: true, vision: true, reasoning: false },
+  },
   {
     id: "gemini-2.5-flash-lite",
     name: "Gemini 2.5 Flash Lite",

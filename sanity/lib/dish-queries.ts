@@ -21,7 +21,7 @@ export type RetrievedDish = {
 
 // Portable-text fields are flattened server-side with pt::text() so we can use
 // them as plain strings. Images are kept as raw refs for <DishCard>.
-const ALL_DISHES_QUERY = `*[_type == "yorubaDish"]{
+const DISH_PROJECTION = `{
   _id,
   name,
   category,
@@ -31,6 +31,9 @@ const ALL_DISHES_QUERY = `*[_type == "yorubaDish"]{
   "additionalInfoText": pt::text(additionalInfo),
   ingredients[]{ _key, name, quantity, image }
 }`;
+
+const ALL_DISHES_QUERY = `*[_type == "yorubaDish"]${DISH_PROJECTION}`;
+const DISH_BY_ID_QUERY = `*[_type == "yorubaDish" && _id == $id][0]${DISH_PROJECTION}`;
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 let cache: { at: number; dishes: RetrievedDish[] } | null = null;
@@ -42,6 +45,23 @@ async function getAllDishes(): Promise<RetrievedDish[]> {
   const dishes = await client.fetch<RetrievedDish[]>(ALL_DISHES_QUERY);
   cache = { at: Date.now(), dishes: dishes ?? [] };
   return cache.dishes;
+}
+
+/** Drop the in-memory dish cache so the next search re-reads Sanity. */
+export function invalidateDishCache(): void {
+  cache = null;
+}
+
+/**
+ * Fetch one dish straight from the Sanity API (bypassing both the CDN and the
+ * in-memory cache). Used by the re-indexing webhook, which must see the edit
+ * that just happened. Returns null if the dish no longer exists.
+ */
+export async function getDishFresh(id: string): Promise<RetrievedDish | null> {
+  const dish = await client
+    .withConfig({ useCdn: false })
+    .fetch<RetrievedDish | null>(DISH_BY_ID_QUERY, { id });
+  return dish ?? null;
 }
 
 export async function getDishById(id: string): Promise<RetrievedDish | null> {

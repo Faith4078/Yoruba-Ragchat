@@ -279,11 +279,10 @@ The interface displays each retrieved dish's picture as a card BELOW your text, 
           model: getLanguageModel(chatModel),
           system: ragSystem,
           messages: modelMessages,
-          // Absorb Gemini free-tier burst throttling (429 with a retry-after of
-          // ~10-30s) transparently: exponential backoff 2s/4s/8s/16s ≈ 30s of
-          // patience, comfortably inside maxDuration (60s). The user just sees
-          // a slower response instead of an error.
-          maxRetries: 4,
+          // Gemini models retry (exponential backoff) and fall back to another
+          // model inside getLanguageModel (lib/ai/resilient-model.ts), so the SDK
+          // must not retry on top of that. Gateway models keep the SDK retries.
+          maxRetries: isGoogleModel ? 0 : 4,
           providerOptions: {
             ...(modelConfig?.gatewayOrder && {
               gateway: { order: modelConfig.gatewayOrder },

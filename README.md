@@ -25,7 +25,7 @@ Built with Next.js App Router, the Vercel AI SDK, Sanity, Neon Postgres (with pg
 - **Hybrid retrieval**: dish search fuses lexical keyword matching with vector similarity search using Reciprocal Rank Fusion, so both exact name matches and semantically related queries surface the right dish.
 - **Rich dish cards**: every retrieved dish renders as a card with its main picture and a horizontally scrollable ingredient carousel, both inline in the chat and at a standalone `/dishes/[id]` route.
 - **Sanity Studio built in**: content editors manage dishes at `/studio` with no separate deployment, using a schema tailored to Yoruba dish data (name, category, picture, background, ingredients with photos, recipe, additional info).
-- **Multiple models**: Gemini 2.5 Flash Lite is the default (served directly with your own free tier Gemini key), with Gemini 2.5 Flash and Pro, plus gateway routed models (DeepSeek, Mistral, Kimi K2.5, GPT OSS, Grok) available from the model picker.
+- **Multiple models**: Gemini 3.1 Flash Lite is the default (served directly with your own free tier Gemini key) and falls back to Gemini 2.5 Flash when rate limited, with Gemini 2.5 Flash Lite and Pro also available, plus gateway routed models (DeepSeek, Mistral, Kimi K2.5, GPT OSS, Grok) available from the model picker.
 - **Flexible auth**: anonymous visitors can chat immediately with nothing persisted; signing in with Clerk unlocks saved chat history, renaming, deleting, and resumable streams.
 - **Guardrails**: hourly per user message entitlements, IP based rate limiting through Redis in production, and bot protection via Vercel BotID.
 - **Composer slash commands**: `/new`, `/clear`, `/rename`, `/theme`, `/delete`, and `/purge` for quick chat management.
@@ -155,6 +155,8 @@ proxy.ts                   Clerk middleware (exported as the Next.js middleware)
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | yes | Clerk publishable key |
 | `CLERK_SECRET_KEY` | yes | Clerk secret key |
 | `AI_GATEWAY_API_KEY` | only off Vercel | Needed to call the non-Gemini models through the Vercel AI Gateway when not deployed on Vercel (Vercel deployments authenticate automatically via OIDC) |
+| `GEMINI_FALLBACK_MODEL` | no | Gemini model used when the selected one stays rate limited after retries (default `gemini-2.5-flash`) |
+| `SANITY_WEBHOOK_SECRET` | no | Shared secret for the `/api/sanity-webhook` auto re-indexing endpoint; the endpoint returns 500 if unset |
 | `REDIS_URL` | no | Enables IP based rate limiting and resumable stream support in production; safely skipped in development |
 | `BLOB_READ_WRITE_TOKEN` | no | Vercel Blob token for the image upload endpoint |
 | `IS_DEMO` | no | Set to `1` to mount the app under a `/demo` base path |
@@ -174,6 +176,20 @@ Dishes live in Sanity, not in the repository. To add or edit content:
    ```
 
    This script pulls every dish from Sanity, embeds it with Gemini, and upserts the vectors into the `dish_embedding` table in Neon. It needs `DATABASE_URL` and `GEMINI_API_KEY`. Skipping this step is fine; retrieval automatically falls back to lexical search only.
+
+### Automatic re-indexing (optional)
+
+Instead of re-running the script by hand, let Sanity refresh the vectors for you. `app/api/sanity-webhook/route.ts` re-embeds a single dish whenever it is created or edited, and removes its vector when it is deleted.
+
+1. Set `SANITY_WEBHOOK_SECRET` to a long random string in your environment.
+2. In Sanity (manage.sanity.io, your project, API, Webhooks) add a webhook:
+   - URL: `https://<your-domain>/api/sanity-webhook`
+   - Filter: `_type == "yorubaDish"`
+   - Projection: `{_id}`
+   - Trigger on: Create, Update, Delete
+   - Secret: the same value as `SANITY_WEBHOOK_SECRET`
+
+Run the full script once first so the `dish_embedding` table exists. Requests are verified with Sanity's HMAC signature, so unsigned calls get a 401.
 
 ## Scripts
 

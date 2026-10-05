@@ -1,4 +1,4 @@
-import { cosineDistance, desc, gt, sql } from "drizzle-orm";
+import { cosineDistance, desc, eq, gt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { pgTable, text, timestamp, vector } from "drizzle-orm/pg-core";
 import postgres from "postgres";
@@ -64,7 +64,12 @@ export async function upsertDishEmbedding(row: DishEmbeddingRow): Promise<void> 
     });
 }
 
-export type EmbeddingMatch = { dishId: string; similarity: number };
+export async function deleteDishEmbedding(dishId: string): Promise<void> {
+  const { db } = getDb();
+  await db.delete(dishEmbedding).where(eq(dishEmbedding.dishId, dishId));
+}
+
+export type EmbeddingMatch ={ dishId: string; similarity: number };
 
 /**
  * Cosine top-k over the dish vector store. Returns dish ids ranked by
