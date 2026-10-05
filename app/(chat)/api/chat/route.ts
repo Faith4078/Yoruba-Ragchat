@@ -1,16 +1,17 @@
+import { auth } from "@clerk/nextjs/server";
 import { geolocation, ipAddress } from "@vercel/functions";
 import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
   generateId,
+  stepCountIs,
   streamText,
 } from "ai";
 import { checkBotId } from "botid/server";
 import { after } from "next/server";
-import { z } from "zod";
 import { createResumableStreamContext } from "resumable-stream";
-import { auth } from "@clerk/nextjs/server";
+import { z } from "zod";
 import { entitlements } from "@/lib/ai/entitlements";
 import {
   allowedModelIds,
@@ -42,6 +43,7 @@ import {
   getTextFromMessage,
 } from "@/lib/utils";
 import { searchDishes as retrieveDishes } from "@/sanity/lib/dish-queries";
+import { searchDishes as dishSearchTool } from "@/lib/ai/tools/search-dishes";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -68,7 +70,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { id, message, messages, selectedChatModel, selectedVisibilityType } =
+    const { id, message, messages, selectedChatModel, selectedVisibilityType, selectedLanguage } =
       requestBody;
 
     const [, { userId }] = await Promise.all([
@@ -204,69 +206,140 @@ export async function POST(request: Request) {
     const capabilities = modelCapabilities[chatModel];
     const isReasoningModel = capabilities?.reasoning === true;
     const isGoogleModel = modelConfig?.provider === "google";
+    // Agentic retrieval needs real tool-calling support. Models without it
+    // fall back to the heuristic pre-retrieval path further down.
+    const supportsTools = capabilities?.tools === true;
 
     const modelMessages = await convertToModelMessages(uiMessages);
 
-    // ---- Standard RAG: retrieve first, then a SINGLE generation ----
-    // Retrieve the relevant dish(es) ourselves rather than letting the model
-    // call a tool. This keeps it to one model call per message (half the API
-    // calls, so we stay within Gemini's free-tier limits) and gives us exact,
-    // deterministic control over how many dish cards show: one card for a
-    // specific-dish question, several only for a list/recommendation request.
     const latestUserText = getTextFromMessage(
       (uiMessages.at(-1) ?? message) as ChatMessage
     );
-    const wantsMany =
-      /\b(recommend|list|suggest|options?|several|some|a few|what|which)\b/i.test(
-        latestUserText
-      ) &&
-      /\b(dish|dishes|food|foods|meal|meals|snack|snacks|soup|soups|swallow|recipe|recipes|option|options)\b/i.test(
-        latestUserText
+
+    let ragSystem: string;
+    let dishesForUI: Array<{
+      _id: string;
+      name: string | null;
+      category: string | null;
+      picture: unknown;
+      ingredients: unknown[];
+      history: string | null;
+      regionalVariations: string | null;
+      cookingInstructions: string[] | null;
+    }> = [];
+    let toolsForModel: { searchDishes: typeof dishSearchTool } | undefined;
+    let stopWhenForModel: ReturnType<typeof stepCountIs> | undefined;
+
+    if (supportsTools) {
+      // ---- Agentic RAG: the model itself decides whether/what to retrieve ----
+      // Trades the "exactly one Gemini call per turn" guarantee of the
+      // heuristic path below for correctness on queries the regex heuristics
+      // can't classify (non-English phrasing, unusual wording, follow-ups).
+      // Turns where the model actually calls searchDishes cost 2 calls
+      // (tool call + final answer) instead of 1 — eats into the free-tier
+      // daily quota faster. stepCountIs(4) caps it well short of runaway
+      // tool-call loops.
+      ragSystem = systemPrompt({
+        requestHints,
+        supportsTools: true,
+        language: selectedLanguage ?? "en",
+      });
+      toolsForModel = { searchDishes: dishSearchTool };
+      stopWhenForModel = stepCountIs(4);
+    } else {
+      // ---- Fallback for models without tool-calling support: retrieve
+      // first with regex heuristics, then a SINGLE generation. ----
+      // Multi-turn context: if the current query is short, prepend the previous user query
+      let queryText = latestUserText;
+      if (uiMessages.length > 2 && queryText.split(/\s+/).length <= 8) {
+        const prevUserMsgs = uiMessages.filter((m) => m.role === "user");
+        const prevUserMsg = prevUserMsgs.length > 1 ? prevUserMsgs[prevUserMsgs.length - 2] : null;
+        if (prevUserMsg) {
+          queryText = `${getTextFromMessage(prevUserMsg as ChatMessage)} ${queryText}`;
+        }
+      }
+
+      const wantsMany =
+        /\b(recommend|list|suggest|options?|several|some|a few|what|which)\b/i.test(
+          queryText
+        ) &&
+        /\b(dish|dishes|food|foods|meal|meals|snack|snacks|soup|soups|swallow|recipe|recipes|option|options)\b/i.test(
+          queryText
+        );
+
+      const isGreeting = /^(hi|hello|hey|good morning|good afternoon|good evening|how are you|what can you do|who are you|thanks|thank you|bawo\s*ni+|e\s*kaaro|e\s*ku\s*irole|e\s*ku\s*ale|e\s*kaasan|pele\s*o|o\s*da\s*aro|kilode|se\s*alafia\s*ni|how\s*far|wetin\s*dey|na\s*you\s*berekete|how\s*bodu|how\s*body|how\s*you\s*dey|abeg|sowapa|sho\s*wa\s*pa)\b/i.test(latestUserText.trim());
+
+      const retrievedDishes = isGreeting ? [] : await retrieveDishes(
+        queryText,
+        wantsMany ? 5 : 1
       );
-    const retrievedDishes = await retrieveDishes(
-      latestUserText,
-      wantsMany ? 5 : 1
-    );
 
-    const dishesForUI = retrievedDishes.map((dish) => ({
-      _id: dish._id,
-      name: dish.name ?? null,
-      category: dish.category ?? null,
-      picture: dish.picture ?? null,
-      ingredients: dish.ingredients ?? [],
-    }));
+      const wantsIngredients = /\b(ingredient|ingredients|what is inside|what's inside|made of)\b/i.test(latestUserText);
+      const wantsHistory = /\b(history|origin|from|where|cultural|story|background|who made|invented)\b/i.test(latestUserText);
+      const wantsRecipe = /\b(recipe|cook|make|prepare|steps|instructions|how to)\b/i.test(latestUserText);
 
-    const dishContext =
-      retrievedDishes.length > 0
-        ? retrievedDishes
-            .map((dish, i) => {
-              const ingredients = (dish.ingredients ?? [])
-                .map((ing) =>
-                  [ing.name, ing.quantity].filter(Boolean).join(" — ")
-                )
-                .filter(Boolean)
-                .join("; ");
-              return [
-                `Dish ${i + 1}: ${dish.name ?? "Unknown"}`,
-                dish.category && `Category: ${dish.category}`,
-                dish.backgroundText && `Background: ${dish.backgroundText}`,
-                ingredients && `Ingredients: ${ingredients}`,
-                dish.recipeText && `Recipe: ${dish.recipeText}`,
-                dish.additionalInfoText && `More: ${dish.additionalInfoText}`,
-              ]
-                .filter(Boolean)
-                .join("\n");
-            })
-            .join("\n\n---\n\n")
-        : "No matching dishes were found in the knowledge base.";
+      let sectionsToShow = {
+        ingredients: wantsIngredients || wantsRecipe,
+        history: wantsHistory,
+        recipe: wantsRecipe,
+      };
 
-    const ragSystem = `${systemPrompt({ requestHints, supportsTools: false })}
+      // If the user didn't ask for specific parts, show everything by default.
+      if (!wantsIngredients && !wantsHistory && !wantsRecipe) {
+        sectionsToShow = { ingredients: true, history: true, recipe: true };
+      }
 
-Retrieved dish information (answer using ONLY this — do not invent dishes, ingredients, origins, or steps):
+      dishesForUI = retrievedDishes.map((dish) => ({
+        _id: dish._id,
+        name: dish.name ?? null,
+        category: dish.category ?? null,
+        picture: dish.picture ?? null,
+        ingredients: sectionsToShow.ingredients ? (dish.ingredients ?? []) : [],
+        history: sectionsToShow.history ? (dish.backgroundText ?? null) : null,
+        regionalVariations: sectionsToShow.history ? (dish.additionalInfoText ?? null) : null,
+        cookingInstructions: sectionsToShow.recipe && dish.recipeText ? dish.recipeText.split('\n').filter(s => s.trim()) : null,
+      }));
+
+      const dishContext =
+        retrievedDishes.length > 0
+          ? retrievedDishes
+              .map((dish, i) => {
+                const ingredients = (dish.ingredients ?? [])
+                  .map((ing) =>
+                    [ing.name, ing.quantity].filter(Boolean).join(" — ")
+                  )
+                  .filter(Boolean)
+                  .join("; ");
+                return [
+                  `Dish ${i + 1}: ${dish.name ?? "Unknown"}`,
+                  `ID: ${dish._id}`,
+                  dish.category && `Category: ${dish.category}`,
+                  dish.backgroundText && `Background: ${dish.backgroundText}`,
+                  ingredients && `Ingredients: ${ingredients}`,
+                  dish.recipeText && `Recipe: ${dish.recipeText}`,
+                  dish.additionalInfoText && `More: ${dish.additionalInfoText}`,
+                ]
+                  .filter(Boolean)
+                  .join("\n");
+              })
+              .join("\n\n---\n\n")
+          : "No matching dishes were found in the knowledge base.";
+
+      ragSystem = `${systemPrompt({ requestHints, supportsTools: false, language: selectedLanguage ?? "en" })}
+
+Retrieved dish information:
+(If the user is asking a recipe question, answer using ONLY this — do not invent dishes, ingredients, origins, or steps.)
+(If the user is just greeting you or chatting off-topic, IGNORE these retrieved dishes entirely and just respond to their chat.)
 
 ${dishContext}
 
-The interface displays each retrieved dish's picture as a card BELOW your text, so write the full written details first and never paste image URLs.`;
+When you cite information from a retrieved dish, add a small superscript number like [1] after the claim. Do NOT include a Sources section or any links at the end — the dish card already serves as the visual citation.
+
+${retrievedDishes.length > 0 ? `CRITICAL INSTRUCTION FOR DISHES:
+You are chatting alongside a rich graphical UI that displays "Dish Cards" for every dish you retrieve. This card perfectly renders all the ingredients, history, and cooking instructions visually. 
+Because of this, you must NEVER write out the ingredients list, recipe steps, or history in your text output! Doing so is highly redundant and ruins the user experience.
+Your text response MUST be limited to a SINGLE, extremely short introductory sentence that EXPLICITLY mentions the dish name (e.g., "Here is the history of Amala:", "These are the ingredients for Marùgbó:"). DO NOT output bullet points, numbered lists, or paragraphs when talking about a retrieved dish. Let the card do the talking!` : ""}`;
+    }
 
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {
@@ -279,6 +352,8 @@ The interface displays each retrieved dish's picture as a card BELOW your text, 
           model: getLanguageModel(chatModel),
           system: ragSystem,
           messages: modelMessages,
+          tools: toolsForModel,
+          stopWhen: stopWhenForModel,
           // Gemini models retry (exponential backoff) and fall back to another
           // model inside getLanguageModel (lib/ai/resilient-model.ts), so the SDK
           // must not retry on top of that. Gateway models keep the SDK retries.

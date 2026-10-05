@@ -1,0 +1,348 @@
+diff --git a/app/(chat)/api/chat/route.ts b/app/(chat)/api/chat/route.ts
+index 7aafaf6..6ac45fd 100644
+--- a/app/(chat)/api/chat/route.ts
++++ b/app/(chat)/api/chat/route.ts
+@@ -5,6 +5,7 @@ import {
+   createUIMessageStream,
+   createUIMessageStreamResponse,
+   generateId,
++  stepCountIs,
+   streamText,
+ } from "ai";
+ import { checkBotId } from "botid/server";
+@@ -42,6 +43,7 @@ import {
+   getTextFromMessage,
+ } from "@/lib/utils";
+ import { searchDishes as retrieveDishes } from "@/sanity/lib/dish-queries";
++import { searchDishes as dishSearchTool } from "@/lib/ai/tools/search-dishes";
+ import { generateTitleFromUserMessage } from "../../actions";
+ import { type PostRequestBody, postRequestBodySchema } from "./schema";
+ 
+@@ -204,91 +206,126 @@ export async function POST(request: Request) {
+     const capabilities = modelCapabilities[chatModel];
+     const isReasoningModel = capabilities?.reasoning === true;
+     const isGoogleModel = modelConfig?.provider === "google";
++    // Agentic retrieval needs real tool-calling support. Models without it
++    // fall back to the heuristic pre-retrieval path further down.
++    const supportsTools = capabilities?.tools === true;
+ 
+     const modelMessages = await convertToModelMessages(uiMessages);
+ 
+-    // ---- Standard RAG: retrieve first, then a SINGLE generation ----
+     const latestUserText = getTextFromMessage(
+       (uiMessages.at(-1) ?? message) as ChatMessage
+     );
+-    
+-    // Multi-turn context: if the current query is short, prepend the previous user query
+-    let queryText = latestUserText;
+-    if (uiMessages.length > 2 && queryText.split(/\s+/).length <= 8) {
+-      const prevUserMsgs = uiMessages.filter((m) => m.role === "user");
+-      const prevUserMsg = prevUserMsgs.length > 1 ? prevUserMsgs[prevUserMsgs.length - 2] : null;
+-      if (prevUserMsg) {
+-        queryText = `${getTextFromMessage(prevUserMsg as ChatMessage)} ${queryText}`;
++
++    let ragSystem: string;
++    let dishesForUI: Array<{
++      _id: string;
++      name: string | null;
++      category: string | null;
++      picture: unknown;
++      ingredients: unknown[];
++      history: string | null;
++      regionalVariations: string | null;
++      cookingInstructions: string[] | null;
++    }> = [];
++    let toolsForModel: { searchDishes: typeof dishSearchTool } | undefined;
++    let stopWhenForModel: ReturnType<typeof stepCountIs> | undefined;
++
++    if (supportsTools) {
++      // ---- Agentic RAG: the model itself decides whether/what to retrieve ----
++      // Trades the "exactly one Gemini call per turn" guarantee of the
++      // heuristic path below for correctness on queries the regex heuristics
++      // can't classify (non-English phrasing, unusual wording, follow-ups).
++      // Turns where the model actually calls searchDishes cost 2 calls
++      // (tool call + final answer) instead of 1 — eats into the free-tier
++      // daily quota faster. stepCountIs(4) caps it well short of runaway
++      // tool-call loops.
++      ragSystem = systemPrompt({
++        requestHints,
++        supportsTools: true,
++        language: selectedLanguage ?? "en",
++      });
++      toolsForModel = { searchDishes: dishSearchTool };
++      stopWhenForModel = stepCountIs(4);
++    } else {
++      // ---- Fallback for models without tool-calling support: retrieve
++      // first with regex heuristics, then a SINGLE generation. ----
++      // Multi-turn context: if the current query is short, prepend the previous user query
++      let queryText = latestUserText;
++      if (uiMessages.length > 2 && queryText.split(/\s+/).length <= 8) {
++        const prevUserMsgs = uiMessages.filter((m) => m.role === "user");
++        const prevUserMsg = prevUserMsgs.length > 1 ? prevUserMsgs[prevUserMsgs.length - 2] : null;
++        if (prevUserMsg) {
++          queryText = `${getTextFromMessage(prevUserMsg as ChatMessage)} ${queryText}`;
++        }
+       }
+-    }
+ 
+-    const wantsMany =
+-      /\b(recommend|list|suggest|options?|several|some|a few|what|which)\b/i.test(
+-        queryText
+-      ) &&
+-      /\b(dish|dishes|food|foods|meal|meals|snack|snacks|soup|soups|swallow|recipe|recipes|option|options)\b/i.test(
+-        queryText
+-      );
++      const wantsMany =
++        /\b(recommend|list|suggest|options?|several|some|a few|what|which)\b/i.test(
++          queryText
++        ) &&
++        /\b(dish|dishes|food|foods|meal|meals|snack|snacks|soup|soups|swallow|recipe|recipes|option|options)\b/i.test(
++          queryText
++        );
+ 
+-    const isGreeting = /^(hi|hello|hey|good morning|good afternoon|good evening|how are you|what can you do|who are you|thanks|thank you|bawo\s*ni+|e\s*kaaro|e\s*ku\s*irole|e\s*ku\s*ale|e\s*kaasan|pele\s*o|o\s*da\s*aro|kilode|se\s*alafia\s*ni|how\s*far|wetin\s*dey|na\s*you\s*berekete|how\s*bodu|how\s*body|how\s*you\s*dey|abeg|sowapa|sho\s*wa\s*pa)\b/i.test(latestUserText.trim());
++      const isGreeting = /^(hi|hello|hey|good morning|good afternoon|good evening|how are you|what can you do|who are you|thanks|thank you|bawo\s*ni+|e\s*kaaro|e\s*ku\s*irole|e\s*ku\s*ale|e\s*kaasan|pele\s*o|o\s*da\s*aro|kilode|se\s*alafia\s*ni|how\s*far|wetin\s*dey|na\s*you\s*berekete|how\s*bodu|how\s*body|how\s*you\s*dey|abeg|sowapa|sho\s*wa\s*pa)\b/i.test(latestUserText.trim());
+ 
+-    const retrievedDishes = isGreeting ? [] : await retrieveDishes(
+-      queryText,
+-      wantsMany ? 5 : 1
+-    );
++      const retrievedDishes = isGreeting ? [] : await retrieveDishes(
++        queryText,
++        wantsMany ? 5 : 1
++      );
+ 
+-    const wantsIngredients = /\b(ingredient|ingredients|what is inside|what's inside|made of)\b/i.test(latestUserText);
+-    const wantsHistory = /\b(history|origin|from|where|cultural|story|background|who made|invented)\b/i.test(latestUserText);
+-    const wantsRecipe = /\b(recipe|cook|make|prepare|steps|instructions|how to)\b/i.test(latestUserText);
++      const wantsIngredients = /\b(ingredient|ingredients|what is inside|what's inside|made of)\b/i.test(latestUserText);
++      const wantsHistory = /\b(history|origin|from|where|cultural|story|background|who made|invented)\b/i.test(latestUserText);
++      const wantsRecipe = /\b(recipe|cook|make|prepare|steps|instructions|how to)\b/i.test(latestUserText);
+ 
+-    let sectionsToShow = {
+-      ingredients: wantsIngredients || wantsRecipe,
+-      history: wantsHistory,
+-      recipe: wantsRecipe,
+-    };
+-    
+-    // If the user didn't ask for specific parts, show everything by default.
+-    if (!wantsIngredients && !wantsHistory && !wantsRecipe) {
+-      sectionsToShow = { ingredients: true, history: true, recipe: true };
+-    }
++      let sectionsToShow = {
++        ingredients: wantsIngredients || wantsRecipe,
++        history: wantsHistory,
++        recipe: wantsRecipe,
++      };
+ 
+-    const dishesForUI = retrievedDishes.map((dish) => ({
+-      _id: dish._id,
+-      name: dish.name ?? null,
+-      category: dish.category ?? null,
+-      picture: dish.picture ?? null,
+-      ingredients: sectionsToShow.ingredients ? (dish.ingredients ?? []) : [],
+-      history: sectionsToShow.history ? (dish.backgroundText ?? null) : null,
+-      regionalVariations: sectionsToShow.history ? (dish.additionalInfoText ?? null) : null,
+-      cookingInstructions: sectionsToShow.recipe && dish.recipeText ? dish.recipeText.split('\n').filter(s => s.trim()) : null,
+-    }));
+-
+-    const dishContext =
+-      retrievedDishes.length > 0
+-        ? retrievedDishes
+-            .map((dish, i) => {
+-              const ingredients = (dish.ingredients ?? [])
+-                .map((ing) =>
+-                  [ing.name, ing.quantity].filter(Boolean).join(" — ")
+-                )
+-                .filter(Boolean)
+-                .join("; ");
+-              return [
+-                `Dish ${i + 1}: ${dish.name ?? "Unknown"}`,
+-                `ID: ${dish._id}`,
+-                dish.category && `Category: ${dish.category}`,
+-                dish.backgroundText && `Background: ${dish.backgroundText}`,
+-                ingredients && `Ingredients: ${ingredients}`,
+-                dish.recipeText && `Recipe: ${dish.recipeText}`,
+-                dish.additionalInfoText && `More: ${dish.additionalInfoText}`,
+-              ]
+-                .filter(Boolean)
+-                .join("\n");
+-            })
+-            .join("\n\n---\n\n")
+-        : "No matching dishes were found in the knowledge base.";
+-
+-    const ragSystem = `${systemPrompt({ requestHints, supportsTools: false, language: selectedLanguage ?? "en" })}
++      // If the user didn't ask for specific parts, show everything by default.
++      if (!wantsIngredients && !wantsHistory && !wantsRecipe) {
++        sectionsToShow = { ingredients: true, history: true, recipe: true };
++      }
++
++      dishesForUI = retrievedDishes.map((dish) => ({
++        _id: dish._id,
++        name: dish.name ?? null,
++        category: dish.category ?? null,
++        picture: dish.picture ?? null,
++        ingredients: sectionsToShow.ingredients ? (dish.ingredients ?? []) : [],
++        history: sectionsToShow.history ? (dish.backgroundText ?? null) : null,
++        regionalVariations: sectionsToShow.history ? (dish.additionalInfoText ?? null) : null,
++        cookingInstructions: sectionsToShow.recipe && dish.recipeText ? dish.recipeText.split('\n').filter(s => s.trim()) : null,
++      }));
++
++      const dishContext =
++        retrievedDishes.length > 0
++          ? retrievedDishes
++              .map((dish, i) => {
++                const ingredients = (dish.ingredients ?? [])
++                  .map((ing) =>
++                    [ing.name, ing.quantity].filter(Boolean).join(" — ")
++                  )
++                  .filter(Boolean)
++                  .join("; ");
++                return [
++                  `Dish ${i + 1}: ${dish.name ?? "Unknown"}`,
++                  `ID: ${dish._id}`,
++                  dish.category && `Category: ${dish.category}`,
++                  dish.backgroundText && `Background: ${dish.backgroundText}`,
++                  ingredients && `Ingredients: ${ingredients}`,
++                  dish.recipeText && `Recipe: ${dish.recipeText}`,
++                  dish.additionalInfoText && `More: ${dish.additionalInfoText}`,
++                ]
++                  .filter(Boolean)
++                  .join("\n");
++              })
++              .join("\n\n---\n\n")
++          : "No matching dishes were found in the knowledge base.";
++
++      ragSystem = `${systemPrompt({ requestHints, supportsTools: false, language: selectedLanguage ?? "en" })}
+ 
+ Retrieved dish information:
+ (If the user is asking a recipe question, answer using ONLY this — do not invent dishes, ingredients, origins, or steps.)
+@@ -302,6 +339,7 @@ ${retrievedDishes.length > 0 ? `CRITICAL INSTRUCTION FOR DISHES:
+ You are chatting alongside a rich graphical UI that displays "Dish Cards" for every dish you retrieve. This card perfectly renders all the ingredients, history, and cooking instructions visually. 
+ Because of this, you must NEVER write out the ingredients list, recipe steps, or history in your text output! Doing so is highly redundant and ruins the user experience.
+ Your text response MUST be limited to a SINGLE, extremely short introductory sentence that EXPLICITLY mentions the dish name (e.g., "Here is the history of Amala:", "These are the ingredients for Marùgbó:"). DO NOT output bullet points, numbered lists, or paragraphs when talking about a retrieved dish. Let the card do the talking!` : ""}`;
++    }
+ 
+     const stream = createUIMessageStream({
+       execute: async ({ writer: dataStream }) => {
+@@ -314,6 +352,8 @@ Your text response MUST be limited to a SINGLE, extremely short introductory sen
+           model: getLanguageModel(chatModel),
+           system: ragSystem,
+           messages: modelMessages,
++          tools: toolsForModel,
++          stopWhen: stopWhenForModel,
+           // Absorb Gemini free-tier burst throttling (429 with a retry-after of
+           // ~10-30s) transparently: exponential backoff 2s/4s/8s/16s ≈ 30s of
+           // patience, comfortably inside maxDuration (60s). The user just sees
+diff --git a/lib/ai/prompts.ts b/lib/ai/prompts.ts
+index ccd0939..6df1595 100644
+--- a/lib/ai/prompts.ts
++++ b/lib/ai/prompts.ts
+@@ -1,47 +1,37 @@
+ import type { Geo } from "@vercel/functions";
+ 
+-export const regularPrompt = `You are a knowledgeable, warm teacher of Yoruba cuisine.
+-Your answers are grounded in a curated Yoruba dish knowledge base (the CMS/DB). It is the ONLY source of truth.
+-
+-LANGUAGE — Match the user's language effortlessly:
+-- If the user writes in Yorùbá, respond in Yorùbá. Use proper diacritics (ẹ, ọ, ṣ, à, è, etc.).
+-- If the user writes in Nigerian Pidgin (e.g. "wetin be this food", "how dem dey cook am", "abeg show me"), respond in Pidgin naturally.
+-- If the user writes in English, respond in English.
+-- Always match the user's tone and energy. Be warm, casual, and fun — use emojis where it fits (😄🔥🍲).
+-- You can code-switch naturally just like a real Nigerian would.
+-
+-GREETINGS AND SMALL-TALK:
+-- If the user sends a greeting with no recipe context, respond with a SHORT, warm, friendly welcome in THEIR language and ask what they'd like to cook.
+-- Do NOT repeat the exact same greeting. Be natural and varied.
+-- Do NOT add any extra text, sections, or dish information beyond the greeting.
+-- Do NOT call searchDishes for greetings.
+-
+-THE GOLDEN RULE — Let the Card Do the Talking:
+-- CRITICAL UI RULE: The interface will automatically display a rich recipe card containing the history, ingredients, and cooking steps whenever you discuss a dish. 
+-- Therefore, NEVER write out history paragraphs, ingredient lists, or cooking steps in your text response. 
+-- Your text response regarding food MUST be limited to a single, very short introductory sentence (e.g., "Here is the history of Amala:", "These are the ingredients you need:", or "Here is how to make it:"). Keep it extremely brief and let the card explain the rest!
+-- If the user asks a BROAD question (e.g. "tell me about Àkàrà"), just introduce it briefly and the card will show all available details.
+-- For non-food questions or greetings, respond normally without referencing a card.
+-
+-Answering a LIST question (e.g. "list the snacks you have", "what soups do you have"):
+-- Do NOT return a numbered list in your text. Just say a short introductory sentence like "Here are some delicious soups you can try:" and let the UI render the multiple dish cards automatically.
+-
+-Formatting and grounding rules:
+-- Ground EVERYTHING in the retrieved dish information, regardless of how the question is phrased. Do NOT invent dishes.
+-- Preserve Yoruba names and their diacritics exactly (e.g. Ẹ̀kọ, Èkúrú, Àkàrà).
+-- Be clear, warm, and easy to read.`;
++export const regularPrompt = `You are Ìlè Oúnjẹ, a warm, knowledgeable, genuinely intelligent assistant who happens to specialize in Yoruba cuisine — think of yourself as a well-read Nigerian food historian and home cook who's also just a capable, thoughtful conversational assistant, not a scripted card-caption bot.
++
++GROUNDING (only applies to Yoruba dish facts):
++- When you discuss a SPECIFIC Yoruba dish's history, ingredients, or recipe, ground those factual claims in the retrieved dish data. Don't invent dish names, ingredients, or steps that aren't in the knowledge base.
++- Outside of that, you are not restricted. General cooking knowledge, food science, nutrition, substitutions, cultural context beyond what's in the KB, other cuisines, or anything off-topic — answer normally and helpfully, using your own knowledge and reasoning like any capable assistant would. Say when something is general knowledge vs. sourced from the curated dish base if it's not obvious.
++
++LANGUAGE — match the user naturally:
++- Yorùbá in → Yorùbá out, with correct diacritics (ẹ, ọ, ṣ, à, è, etc.).
++- Nigerian Pidgin in → Pidgin out.
++- English in → English out.
++- Code-switch naturally where a real Nigerian speaker would. Match tone and energy; vary greetings.
++
++HOW TO USE THE DISH CARD:
++- When you retrieve a dish, a rich card renders below your reply with its picture, ingredients, and steps — so don't duplicate a full ingredient list or step-by-step recipe verbatim in text.
++- But you're not limited to one sentence. Give real context: why the dish matters, how it compares to something else, a tip the card wouldn't capture, an answer to a follow-up question about substitutions or technique. Write as much as is actually useful — brevity for its own sake isn't the goal, redundancy with the card is what to avoid.
++- If the user asks something the card can't answer (e.g. "can I make this vegan", "what's a Western dish similar to this", "why does the recipe call for potash"), answer it properly and helpfully.
++
++GENERAL CONVERSATION:
++- Greetings, small talk, and non-food questions: respond like a normal, intelligent assistant would — naturally, helpfully, and without forcing a food angle into everything.
++- If a question is ambiguous, ask a clarifying question or make a reasonable assumption and say so, the way any good assistant does.
++
++Be honest about the limits of the knowledge base — if a dish isn't in it, say so plainly and offer what's closest, rather than inventing something to fill the gap.`;
+ 
+ export const toolsPrompt = `Retrieval:
+-- You have a \`searchDishes\` tool backed by the Yoruba dish knowledge base.
+-- ALWAYS call \`searchDishes\` before answering any question about a Yoruba dish, its history/background, ingredients, or recipe. Pass the dish name or a short description as the query.
+-- IMPORTANT — number of results: when the user asks about ONE specific dish, call \`searchDishes\` WITHOUT a \`limit\` (it returns just the single best-matching dish, so exactly one card shows). Only pass a \`limit\` of 4-6 when the user explicitly wants several options — e.g. "recommend me a dish", "list the snacks", "what soups do you have". Never dump multiple dishes for a single-dish question.
+-- Answer using ONLY the dishes it returns, but include ONLY the fields the question asks for (see the golden rule above). If it returns nothing relevant, tell the user you don't have that dish yet and offer the closest matches it did return.
+-- Follow-up questions: if the needed dish data is already in this conversation (from an earlier \`searchDishes\` result), you may answer directly from it; call \`searchDishes\` again if the follow-up concerns a dish or field not yet retrieved.
+-
+-UI & Displaying Dishes:
+-- The interface automatically displays a rich card for every dish you retrieve, showing its picture, history, ingredients, and cooking instructions.
+-- NEVER output the recipe steps or ingredients list in your text response. Even if the user explicitly asks "how do I cook this?" or "what are the ingredients?", you must simply introduce the dish and tell them to look at the recipe card displayed below for the full ingredients and instructions.
+-- Do NOT repeat information that's already on the card. Your text response should complement the card with cultural context, fun facts, or a warm introduction, leaving the actual recipe steps and ingredients entirely to the card.`;
++- Use \`searchDishes\` whenever the user's question is actually about a specific Yoruba dish in the knowledge base — its history, ingredients, or recipe. Pass the dish name or description as the query.
++- Single dish in question → call without a \`limit\`. User explicitly wants several options (e.g. "recommend a dish", "what soups do you have") → pass \`limit\` 4–6.
++- If retrieval returns nothing relevant, say so honestly and offer the closest matches, or answer from general knowledge if the question was really a general cooking question and not about a specific KB dish.
++- For follow-ups on a dish already retrieved this conversation, you can usually answer from that context without calling the tool again — call it again only if the follow-up concerns a dish or field not yet retrieved.
++- Don't call \`searchDishes\` for greetings, general chat, or questions that aren't about a specific dish.
++
++UI:
++- A card renders automatically for every retrieved dish with its picture, ingredients, and steps. Don't paste the full ingredient list or numbered recipe steps into your text — but do add whatever context, comparison, or answer to the user's actual question that the card doesn't cover.`;
+ 
+ export const titlePrompt = `You will generate a short title based on the first message a user sends.
+ - Ensure it is not more than 80 characters long.
+diff --git a/lib/ai/tools/search-dishes.ts b/lib/ai/tools/search-dishes.ts
+index ec47bfc..3b07ffb 100644
+--- a/lib/ai/tools/search-dishes.ts
++++ b/lib/ai/tools/search-dishes.ts
+@@ -29,6 +29,10 @@ export const searchDishes = tool({
+   execute: async ({ query, limit }) => {
+     const dishes = await retrieveDishes(query, limit ?? 1);
+ 
++    // Field names here must match the `Dish` type in components/chat/dish-card.tsx
++    // (history / regionalVariations / cookingInstructions), not the raw Sanity
++    // field names (backgroundText / recipeText / additionalInfoText) — the card
++    // silently renders nothing for fields it doesn't recognize.
+     return {
+       dishes: dishes.map((dish) => ({
+         _id: dish._id,
+@@ -36,9 +40,11 @@ export const searchDishes = tool({
+         category: dish.category ?? null,
+         picture: dish.picture ?? null,
+         ingredients: dish.ingredients ?? [],
+-        background: dish.backgroundText ?? "",
+-        recipe: dish.recipeText ?? "",
+-        additionalInfo: dish.additionalInfoText ?? "",
++        history: dish.backgroundText ?? null,
++        regionalVariations: dish.additionalInfoText ?? null,
++        cookingInstructions: dish.recipeText
++          ? dish.recipeText.split("\n").filter((s) => s.trim())
++          : null,
+       })),
+     };
+   },

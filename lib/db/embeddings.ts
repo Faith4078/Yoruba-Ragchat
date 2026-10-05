@@ -1,6 +1,6 @@
 import { cosineDistance, desc, eq, gt, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { pgTable, text, timestamp, vector } from "drizzle-orm/pg-core";
+import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { EMBEDDING_DIM } from "@/lib/ai/embeddings";
 
@@ -18,7 +18,10 @@ function getDb() {
     clientSingleton = postgres(connectionString, { max: 1 });
     dbSingleton = drizzle(clientSingleton);
   }
-  return { client: clientSingleton, db: dbSingleton as ReturnType<typeof drizzle> };
+  return {
+    client: clientSingleton,
+    db: dbSingleton as ReturnType<typeof drizzle>,
+  };
 }
 
 export const dishEmbedding = pgTable("dish_embedding", {
@@ -48,7 +51,9 @@ export async function ensureEmbeddingSchema(): Promise<void> {
   `);
 }
 
-export async function upsertDishEmbedding(row: DishEmbeddingRow): Promise<void> {
+export async function upsertDishEmbedding(
+  row: DishEmbeddingRow
+): Promise<void> {
   const { db } = getDb();
   await db
     .insert(dishEmbedding)
@@ -78,7 +83,7 @@ export type EmbeddingMatch ={ dishId: string; similarity: number };
 export async function searchDishEmbeddings(
   queryEmbedding: number[],
   limit = 3,
-  minSimilarity = 0.2
+  minSimilarity = 0.65
 ): Promise<EmbeddingMatch[]> {
   const { db } = getDb();
   const similarity = sql<number>`1 - (${cosineDistance(

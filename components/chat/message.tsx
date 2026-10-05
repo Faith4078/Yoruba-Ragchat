@@ -7,7 +7,7 @@ import { MessageContent, MessageResponse } from "../ai-elements/message";
 import { Shimmer } from "../ai-elements/shimmer";
 import { useDataStream } from "./data-stream-provider";
 import { type Dish, DishCard } from "./dish-card";
-import { SparklesIcon } from "./icons";
+import { BotIcon } from "lucide-react";
 import { MessageActions } from "./message-actions";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
@@ -113,7 +113,7 @@ const PurePreviewMessage = ({
       return (
         <MessageContent
           className={cn("text-[13px] leading-[1.65]", {
-            "w-fit max-w-[min(80%,56ch)] overflow-hidden break-words rounded-2xl rounded-br-lg border border-border/30 bg-gradient-to-br from-secondary to-muted px-3.5 py-2 shadow-[var(--shadow-card)]":
+            "w-fit max-w-[min(80%,56ch)] overflow-hidden break-words rounded-2xl rounded-br-lg border border-transparent bg-gradient-to-br from-[#8A4F1D] to-[#4F2B0C] text-white px-3.5 py-2 shadow-[var(--shadow-card)]":
               message.role === "user",
           })}
           data-testid="message-content"
@@ -129,13 +129,23 @@ const PurePreviewMessage = ({
     // message (below the written details — images last).
     if (type === "data-dishes") {
       const dishes = ("data" in part ? part.data : []) as Dish[];
+      
+      const fullText = message.parts
+        ?.filter((p) => p.type === "text" || p.type === "reasoning")
+        .map((p) => (p as { text?: string }).text ?? "")
+        .join(" ")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
       for (const dish of dishes ?? []) {
         dishCards.push(dish);
       }
       return null;
     }
 
-    // Backward-compat: older messages persisted as an agentic tool call.
+    // For tool-capable models, dishes are retrieved via the `searchDishes` tool.
+    // For non-tool models, this also provides backward compatibility for older persisted messages.
     if (type === "tool-searchDishes") {
       if (
         part.state === "output-available" &&
@@ -216,8 +226,8 @@ const PurePreviewMessage = ({
       >
         {isAssistant && (
           <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground ring-1 ring-border/50">
-              <SparklesIcon size={13} />
+            <div className="flex size-7 items-center justify-center rounded-lg bg-card text-foreground ring-1 ring-border/50">
+              <BotIcon size={14} />
             </div>
           </div>
         )}
@@ -242,8 +252,8 @@ export const ThinkingMessage = () => {
     >
       <div className="flex items-start gap-3">
         <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-          <div className="flex size-7 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground ring-1 ring-border/50">
-            <SparklesIcon size={13} />
+          <div className="flex size-7 items-center justify-center rounded-lg bg-card text-foreground ring-1 ring-border/50">
+            <BotIcon size={14} />
           </div>
         </div>
 

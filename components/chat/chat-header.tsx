@@ -1,12 +1,54 @@
 "use client";
 
-import { PanelLeftIcon } from "lucide-react";
-import Link from "next/link";
-import { memo } from "react";
+import { MoonIcon, PanelLeftIcon, SunIcon } from "lucide-react";
+import { useTheme } from "next-themes";
+import { memo, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
-import { VercelIcon } from "./icons";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { LanguageToggle } from "./language-toggle";
 import type { VisibilityType } from "./visibility-selector";
+
+function ThemeToggle() {
+  const { setTheme, resolvedTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <Button variant="ghost" size="icon-sm" aria-label="Toggle theme">
+        <div className="size-4" />
+      </Button>
+    );
+  }
+
+  const isDark = resolvedTheme === "dark";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => setTheme(isDark ? "light" : "dark")}
+          aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {isDark ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {isDark ? "Light mode" : "Dark mode"}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 function PureChatHeader({
   chatId,
@@ -20,11 +62,18 @@ function PureChatHeader({
   const { state, toggleSidebar, isMobile } = useSidebar();
 
   if (state === "collapsed" && !isMobile) {
-    return null;
+    return (
+      <header className="sticky top-0 flex h-14 items-center justify-end bg-background px-4">
+        <div className="flex items-center gap-1">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
+      </header>
+    );
   }
 
   return (
-    <header className="sticky top-0 flex h-14 items-center gap-2 bg-sidebar px-3">
+    <header className="sticky top-0 flex h-14 items-center justify-between bg-background px-4">
       <Button
         className="md:hidden"
         onClick={toggleSidebar}
@@ -34,15 +83,10 @@ function PureChatHeader({
         <PanelLeftIcon className="size-4" />
       </Button>
 
-      <Link
-        className="flex size-8 items-center justify-center rounded-lg md:hidden"
-        href="https://vercel.com/templates/next.js/chatbot"
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <VercelIcon size={14} />
-      </Link>
-
+      <div className="ml-auto flex items-center gap-1">
+        <LanguageToggle />
+        <ThemeToggle />
+      </div>
     </header>
   );
 }

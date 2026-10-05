@@ -12,11 +12,8 @@ config({ path: ".env.local" });
 async function main() {
   // Imported after dotenv so lazy env reads pick up .env.local.
   const { embedDocuments } = await import("@/lib/ai/embeddings");
-  const {
-    ensureEmbeddingSchema,
-    upsertDishEmbedding,
-    closeEmbeddingDb,
-  } = await import("@/lib/db/embeddings");
+  const { ensureEmbeddingSchema, upsertDishEmbedding, closeEmbeddingDb } =
+    await import("@/lib/db/embeddings");
   const { getAllDishesForEmbedding, dishEmbeddingText } = await import(
     "@/sanity/lib/dish-queries"
   );

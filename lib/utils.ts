@@ -28,8 +28,19 @@ export async function fetchWithErrorHandlers(
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  if (init?.signal) {
+    init.signal.addEventListener('abort', () => controller.abort());
+  }
+
   try {
-    const response = await fetch(input, init);
+    const response = await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const { code, cause } = await response.json();
@@ -38,6 +49,15 @@ export async function fetchWithErrorHandlers(
 
     return response;
   } catch (error: unknown) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (init?.signal?.aborted) {
+        throw error;
+      }
+      throw new ChatbotError('offline:chat');
+    }
+
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       throw new ChatbotError('offline:chat');
     }

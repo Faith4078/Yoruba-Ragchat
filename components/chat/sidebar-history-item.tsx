@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import type { Chat } from "@/lib/db/schema";
+import { Button } from "../ui/button";
 import {
   Dialog,
   DialogContent,
@@ -23,9 +24,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "../ui/sidebar";
-import { Button } from "../ui/button";
-import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { MoreHorizontalIcon, PencilEditIcon, TrashIcon } from "./icons";
+import { getChatHistoryPaginationKey } from "./sidebar-history";
 
 const PureChatItem = ({
   chat,

@@ -41,7 +41,11 @@ const dishType = defineType({
           name: "ingredient",
           fields: [
             defineField({ name: "name", title: "Name", type: "string" }),
-            defineField({ name: "quantity", title: "Quantity", type: "string" }),
+            defineField({
+              name: "quantity",
+              title: "Quantity",
+              type: "string",
+            }),
             defineField({
               name: "image",
               title: "Image",
